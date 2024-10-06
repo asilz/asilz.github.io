@@ -1,16 +1,15 @@
 ---
 layout: post
 title:  "Telltale Game Engine Animation"
-date:   2024-10-4 00:36:43 +0200
+date:   2024-10-7 01:00:04 +0200
 categories: jekyll update
 ---
-
 # Reverse engineering process
 I start by running [ghidra](https://ghidra-sre.org/). Inside the symbol tree we can look at the member functions for `Animation`. We are looking for the `MetaOperation_SerializeAsync` function. To help the ghidra decompiler, we shall cast the first parameter to `Animation *` and the fourth parameter to `MetaStream *`. Now take a look at the decompiled output. If you see a lot of function pointers `Code **`, it means you are most likely missing the virtual function tables and will need to create those to be able to see which functions are called in the decompiled output. 
 
 The `MetaOperation_SerializeAsync` functions describe how files are serialized. It will give us insight into the structure of the file. At the start of the function, we can see a call to the generic `Meta::MetaOperation_SerializeAsync`. This will iterate through all the members of the animation described in its MetaClassDescription. Let's investigate the `Animation::GetMetaClassDescription` function to figure out what is serialized. 
 
-I was initially very intimidated looking the decompiled output, but all you need to do is to look for other calls to `GetMetaClassDescription` (Here it can be helpful to change the settings in ghidra to show templates). I can see a `long`, `Flags`, `Symbol`, `float`, `float` and a `ToolProps`. `long`, 'float' and `Flags` are 4 byte values. `Symbol` is a crc64-ecma 182 hash (8 bytes). `ToolProps` is 1 byte. 
+I was initially very intimidated looking the decompiled output, but all you need to do is to look for other calls to `GetMetaClassDescription` (Here it can be helpful to change the settings in ghidra to show templates). I can see a `long`, `Flags`, `Symbol`, `float`, `float` and a `ToolProps`. `long`, `float` and `Flags` are 4 byte values. `Symbol` is a crc64-ecma 182 hash (8 bytes). `ToolProps` is 1 byte. 
 
 We now return to `MetaOperation_SerializeAsync` for `Animation`. It is time to analyse the function to attempt to understand the structure of the animation file. You can rename variables, add comments and retype variables to aid you. I would also recommend having an animation file open while analyzing to confirm whether you are interpreting the decompiled output correctly. 
 
@@ -49,13 +48,31 @@ struct Skeleton__Entry
     uint32_t flags;
 };
 {% endhighlight %}
-You might be able to guess how to calculate the bone length. I was unable to do it by just looking the data. One thing that would help finding out how the correct the value is calculated is to know the correct value for the bone length or the `boneScaleAdjust`. Let's run x64dbg again to try and dump the 'boneScaleAdjust' from memory. 
+You might be able to guess how to calculate the bone length. I was unable to do it by just looking the data. One thing that would help finding out how the correct the value is calculated is to know the correct value for the bone length or the `boneScaleAdjust`. Let's run x64dbg again to try and dump the `boneScaleAdjust` from memory. 
 
-
-
+After dumping the data for `boneScaleAdjust`, I was able to notice that the value of `boneScaleAdjust` is equal to the length of `struct Vector3 localPos` in `Skeleton::Entry`. I was also able to dump the data for `boneRotationAdjust` and the rest transforms. With all this data I am able to successfully convert .skl and .anm file to .glb.
 
 
 # Animation file format description
+#### CompressedSkeletonPoseKeys2
+The `CompressedSkeletonPoseKey2` buffer begins with the following header
+{% highlight c %}
+struct CompressedSkeletonPoseKeys2Header
+{
+    float minDeltaV[3];
+    float scaleDeltaV[3];
+    float minDeltaQ[3];
+    float scaleDeltaQ[3];
+    float minVector[3];
+    float scaleVector[3];
+    float timeScale;
+    uint16_t boneSymbolCount;
+    uint16_t paddingMaybe;
+    int64_t sampleDataSize;
+    int64_t unknown;
+};
+{% endhighlight %}
+This header is followed by `sampleData`, which has size equal to `int64_t sampleDataSize`. The `sampleData` contains the data for the vectors and quaternions used in translation and rotations for the animation. The sampleData is followed by an array of symbols which I will call `boneSymbols`. The number of symbols is equal to `boneSymbolCount`. The rest of the data in `CompressedSkeletonPoseKeys2` is an array `subHeaders` of 4 byte values with the following structure.
 
 | bits  |bit size| data                       | description                                                                               |
 |-------|--------|----------------------------|-------------------------------------------------------------------------------------------|
@@ -65,4 +82,30 @@ You might be able to guess how to calculate the bone length. I was unable to do 
 | 30    |1 bit   | `bool isQuaternion`        |whether the frame represents a rotation (true) or translation (false)                      |
 | 31    |1 bit   | `bool isDelta`             |whether the data is an addition upon the previous data (true) or an absolute value (false) |
 
+Our goal is to read the `sampleData`, but in order to know which data is contained in the `sampleData` we need to read the `subHeaders` one by one and figure out what kind of data we are reading.
 
+First read on of the `subHeaders`. The time of the frame is determined by the least significant 16 bits as shown is the table above. To know which bone the frame belongs to you read the next 12 bits and you will know the index. You use the index in `boneSymbols` to know the symbol of the bone so that you can figure out which bone in the skeleton this frame belongs to. Reading the last two bits will allow you to know if it is a quaternion we will be reading or a vector and whether we need to combine it with the previous value since it is a delta.
+
+Here is the tricky part. When you see a subheader, you read four values corrosponding to the header so that the next 3 times you meet the subheader. We can divide our subHeaders into 4 types, quaternion and delta, quaternion and non-delta, vector and delta, vector and non-delta, which depends on the 2 most significant bits in the subHeader as shown in the table above. If I read a vector delta header, I need to read 4 vectors and I only use the first vector. The next time I read a vector delta header, I do not read from the `sampleData`, but I use the second vector from the last time I read. This means that you only read each 4th time you read a specific type of header.
+
+When I said you need to read 4 vectors/quaternions, you do not simply read them as float. A delta vector/quaternion is stored inside 4 bytes, and a non-delta vector/quaternion is stored inside 8 bytes. Like I explained, you will be reading 4 vectors/quaternions at a time. When reading delta vector/quaternion, you will read 16 bytes (4 for each vector/quaternion as mentioned). The first vector/quaternion is stored in the first 4 bytes, the second vector/quaternion is stored in the next 4 bytes and so on. You take the 10 least significant bits in the 4 byte value and that is your x axis in the vector/quaternion, the next 11 bits are your y axis, and the next 11 bits are your z axis. You do this for each set of 4 bytes which will yield 4 vectors/quaternions. Remember that delta values need to be added unto the last value to obtain the correct transformation. For a non-delta value, you will be reading a total of 32 bytes for the 4 vectors/quaternions. The first 16 bytes work exactly as described for the delta vector/quaternion. The last 16 bytes provide 10 extra bits for x, 11 extra bits for y and 11 extra bits for z. The w axis for quaternions is calculated using the following example code 
+
+{% highlight c %}
+w = ((1.0 - x * x) - y * y) - z * z;
+    if (w > 0.0f)
+    {
+        w = sqrtf(w);
+    }
+    else
+    {
+        w = 0.0f;
+    }
+{% endhighlight %}
+
+When reading a non-delta vector, you need to multiply it by `scaleVector` add `minVector`. When reading a delta vector, you need to multiply it by `scaleDeltaV` add `minDeltaV`. When reading a delta vector, you need to multiply it by `scaleDeltaV` add `minDeltaV`. When reading a time, you need to multiply it by 1.525902e-05 and `timeScale`. All these values are inside `CompressedSkeletonPoseKeys2Header`. For a non-delta quaternion, the values are as follows
+{% highlight c %}
+scaleQuaternion = {1.3487e-06, 3.371749e-07, 3.371749e-07};
+deltaQuaternion = {0.7071068, 0.7071068, 0.7071068};
+{% endhighlight %}
+
+You keep reading subHeaders until you reach the end of `CompressedSkeletonPoseKeys2`. You know should have multiple frames for several bones which you can use to render an animation or convert to a different format.
