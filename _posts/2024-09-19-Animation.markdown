@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Telltale Game Engine Animation"
-date:   2024-10-7 01:00:04 +0200
+date:   2024-10-8 23:00:04 +0200
 categories: jekyll update
 ---
 # Reverse engineering process
@@ -108,4 +108,5 @@ scaleQuaternion = {1.3487e-06, 3.371749e-07, 3.371749e-07};
 deltaQuaternion = {0.7071068, 0.7071068, 0.7071068};
 {% endhighlight %}
 
-You keep reading subHeaders until you reach the end of `CompressedSkeletonPoseKeys2`. You know should have multiple frames for several bones which you can use to render an animation or convert to a different format.
+You keep reading subHeaders until you reach the end of `CompressedSkeletonPoseKeys2`. You know should have multiple frames for several bones. 
+Each vertex has 4 blendIndices. Each blendIndex refers to a bone and you can use the blendWeight to determine how much the vertex is affected by this bone. The blendIndices and blendWeights are contained within d3dmesh. Combining the data from .anm and .skl and .d3dmesh, you should be able to convert/render an animated mesh.
