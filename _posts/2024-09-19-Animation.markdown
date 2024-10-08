@@ -54,6 +54,37 @@ After dumping the data for `boneScaleAdjust`, I was able to notice that the valu
 
 
 # Animation file format description
+#### Version 5
+{% highlight c %}
+struct Animation
+{
+    int32_t version;
+    uint32_t flags;
+    uint64_t nameSymbol;
+    float length;
+    float additiveMask;
+    uint8_t toolProps;
+
+    uint32_t block; // size of the rest of the data in the animation file plus the size of the block itself.
+    int32_t interfaceCount;
+    int32_t dataBufferSize;
+    int32_t animValueTypes;
+
+    struct AnimValue
+    {
+        uint64_t typeSymbol;
+        uint16_t valueCount; // Number of values with type = typeSymbol
+        uint16_t typeVersion;
+    } animValues[animValueTypes];
+    /*
+    Here you will find data according to the animValues. For each animValue, you need to read 'valueCount' number of values with dataType equal to typeSymbol. The total number of values should be equal to interfaceCount. 
+    */
+    uint32_t interfaceFlags[interfaceCount]; 
+    uint16_t isInterfaceSymbols;
+    uint64_t interfaceSymbols[interfaceCount] // Only if isInterfaceSymbols.
+};
+{% endhighlight %}
+
 #### CompressedSkeletonPoseKeys2
 The `CompressedSkeletonPoseKey2` buffer begins with the following header
 {% highlight c %}
