@@ -95,3 +95,13 @@ static HRESULT CreateSwapChain1(IDXGIFactory* pThis,
 
 ![Image](/assets/TombRaider/images/box.png)
 
+# SOTTR muscle intensity modification
+I wanted to try modifing the muscle intensity in photo mode beyond the limit that the slider allows. The muscle intensity normally ranges between 0.0f and 1.0f, where 0.0f is the highest muscle intensity and 1.0f is the lowest muscle intensity. The value is modified in SOTTR.exe+0x113b17. Setting the value to a negative value does not do anything, however, you can shrink Lara's muscles by setting it to a value higher than 1.0f.
+
+![Image](/assets/TombRaider/images/Lara_0f_muscle.jpg)
+*Lara with maximum muscle intensity (0.0f)*
+![Image](/assets/TombRaider/images/Lara_1f_muscle.jpg)
+*Lara with minimum muscle intensity (1.0f)*
+![Image](/assets/TombRaider/images/Lara_9999f_muscle.jpg)
+*Lara with a cheated muscle intensity higher than 1.0f*
+
